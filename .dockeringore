@@ -1,0 +1,43 @@
+.git
+Dockerfile
+.DS_Store
+.gitignore
+.dockerignore
+
+/credentials
+/cache
+/store
+
+/node_modules
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environments
+.env
+.venv
+*env/
+*venv/
+ENV/
+
+# mypy
+.mypy_cache/

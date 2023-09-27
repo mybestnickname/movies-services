@@ -1,0 +1,153 @@
+version: "3.9"
+
+services:
+  notifications-db:
+    image: postgres:13-alpine
+    volumes:
+      - notifications_postgres_data:/var/lib/postgresql/data/
+    env_file:
+      - ./notifications/.env
+
+  notifications-admin-panel:
+    build: ./notifications/django-admin-panel
+    volumes:
+      - notifications_static_volume:/code/static
+    env_file:
+      - ./notifications/.env
+    depends_on:
+      - notifications-db
+    command:
+      [
+        "gunicorn",
+        "--bind",
+        ":8000",
+        "--workers",
+        "3",
+        "config.wsgi:application"
+      ]
+
+  celery-worker:
+    build: ./notifications/django-admin-panel
+    env_file:
+      - ./notifications/.env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings
+    depends_on:
+      - notifications-db
+    command:
+      [
+        "celery",
+        "-A",
+        "notifications",
+        "worker",
+        "-l",
+        "info",
+        "-P",
+        "threads"
+      ]
+
+  celery-beat:
+    build: ./notifications/django-admin-panel
+    env_file:
+      - ./notifications/.env
+    depends_on:
+      - notifications-db
+    command: sh -c "celery -A notifications beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+
+  celery-redis:
+    image: redis:6.2-alpine
+    volumes:
+      - celery_cache_volume:/data
+
+  notifications-api-service:
+    build: ./notifications/fastapi-notification-service
+    depends_on:
+      - rabbit-init
+    env_file:
+      - ./notifications/.env
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
+
+  nginx:
+    build: ./notifications/nginx
+    volumes:
+      - notifications_static_volume:/home/app/web/staticfiles
+    ports:
+      - 8000:80
+    depends_on:
+      - notifications-admin-panel
+      - notifications-api-service
+
+  worker1:
+    build: ./notifications/worker
+    restart: always
+    env_file:
+      - ./notifications/.env
+    depends_on:
+      - rabbit1
+    environment:
+      QUEUE_NAME: email
+
+  rabbit1:
+    image: harbur/rabbitmq-cluster
+    hostname: rabbit1
+    expose:
+      - "5672"
+      - "15672"
+    environment:
+      - ERLANG_COOKIE=abcdefg
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  rabbit2:
+    image: harbur/rabbitmq-cluster
+    hostname: rabbit2
+    links:
+      - rabbit1
+    expose:
+      - "5672"
+      - "15672"
+    environment:
+      - ERLANG_COOKIE=abcdefg
+      - CLUSTER_WITH=rabbit1
+      - ENABLE_RAM=false
+      - RAM_NODE=false
+
+  rabbit3:
+    image: harbur/rabbitmq-cluster
+    hostname: rabbit3
+    expose:
+      - "5672"
+    links:
+      - rabbit1
+      - rabbit2
+    environment:
+      - ERLANG_COOKIE=abcdefg
+      - CLUSTER_WITH=rabbit1
+
+  rabbit-init:
+    build: ./notifications/rabbit/init
+    depends_on:
+      - rabbit3
+    command: [ "python3", "init_rabbit_queue.py" ]
+
+volumes:
+  notifications_postgres_data:
+  notifications_static_volume:
+  celery_cache_volume:
+
+
+networks:
+  notification-services:
+    name: notification-services
+    driver: bridge
+  rabbit_network:
+    external: true
