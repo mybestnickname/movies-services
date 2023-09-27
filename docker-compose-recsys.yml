@@ -1,0 +1,168 @@
+version: "3.9"
+
+services:
+  auth-db:
+    image: postgres:13-alpine
+    volumes:
+      - flask_auth_db_data:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+
+  auth-redis:
+    image: redis:6.2-alpine
+    restart: always
+    volumes:
+      - auth-redis_data:/data
+
+  jaeger-trace:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "6831:6831/udp"
+      - "16686:16686"
+
+  flask-auth:
+    build: ./authapp
+    depends_on:
+      - auth-db
+      - auth-redis
+      - jaeger-trace
+    env_file:
+      - .env
+    environment:
+      JAEGER_PORT: 6831
+      JAEGER_HOST: jaeger-trace
+      PYTHONPATH: $PYTHONPATH:/authapp
+
+  # Async Api
+  elasticsearch:
+    image: elasticsearch:7.16.3
+    ports:
+      - 9200:9200
+    volumes:
+      - ./elasticsearch-data:/usr/share/elasticsearch/data
+    logging:
+      driver: none
+    environment:
+      - xpack.monitoring.enabled=true
+      - xpack.watcher.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - discovery.type=single-node
+
+  redis-cache:
+    image: redis:6.2-alpine
+    restart: always
+    volumes:
+      - cache:/data
+
+  web:
+    build: ./fastapi-solution
+    depends_on:
+      - elasticsearch
+      - redis-cache
+    env_file:
+      - .env
+    environment:
+      ENV: prod
+      ELASTIC_HOST: elasticsearch
+      REDIS_HOST: redis-cache
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
+
+  # UGCService
+  ugc-redis-limiter:
+    image: redis:6.2-alpine
+    restart: always
+
+  ugcservice:
+    build: ./ugcservice
+    depends_on:
+      - ugc-redis-limiter
+    env_file:
+      - .env
+    restart: on-failure
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
+  
+  mongodb:
+    image: mongo:5.0.10
+    volumes:
+      - ./mongo-volume:/data/db
+    ports:
+      - 27017:27017
+
+  recsys:
+    build: ./recsys
+    depends_on:
+      - ugcservice
+    env_file:
+      - .env
+    restart: on-failure
+    command:
+      [
+        "python",
+        "main.py"
+      ]
+
+  rec-service:
+    build: ./rec_service
+    depends_on:
+      - rec-redis
+    env_file:
+      - .env
+    environment:
+      ENV: prod
+    command:
+      [
+        "uvicorn",
+        "app.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000"
+      ]
+
+  rec-redis:
+    image: redis:6.2-alpine
+    restart: always
+    volumes:
+      - rec-redis_data:/data
+
+  nginx:
+    build: ./nginx
+    ports:
+      - 8000:80
+    depends_on:
+      - web
+      - ugcservice
+      - rec-service
+    volumes:
+      - /tmp/logs/nginx/:/var/log/nginx/
+    logging:
+      driver: gelf
+      options:
+        gelf-address: udp://127.0.0.1:5044
+        tag: nginx
+
+volumes:
+  elasticsearch-data:
+  cache:
+  flask_auth_db_data:
+  auth-redis_data:
+  mongo-volume:
+  rec-redis_data:

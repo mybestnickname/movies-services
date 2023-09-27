@@ -1,0 +1,24 @@
+import logging
+from logging import Logger
+
+from api.middlewares import get_request_id
+from core.config import Settings
+from core.logger_settings import LOGGING
+
+
+class RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        record.request_id = get_request_id()
+        record.service_name = Settings().SERVICE_NAME
+        record.tags = ["recservice-fastapi-app"]
+        return True
+
+
+def setup_logging(logger: Logger):
+    if Settings().ENV == "dev":
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+    logging.config.dictConfig(LOGGING)
+
+    logger.addFilter(RequestIdFilter())
